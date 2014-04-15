@@ -4,7 +4,7 @@ use warnings;
 use strict;
 
 # Test modules
-use Test::More tests => 12;
+use Test::More tests => 16;
 use Test::Group;
 
 # Search path for our modules
@@ -23,34 +23,162 @@ Test::Group->logfile("$0.log");
 my $qa = new qa();
 
 my $commander = new ElectricCommander();
-#
+
 use POSIX ();
 
-#-----------------------------------------------------------------
+my $testCIProject = "TestCI";
+my $procedureForCI = "PrintSome";
+my $stepForCI = "lil";
+
+my $autoTestProject = "AutomationTest";
+my $autoTestProcedure = "test";
+my $autoTestStep = "gitClone";
+
+my $cl;
+my $output;
+
+# get the current Git plugin name to use later
+$cl = $qa->ectool_command(
+	qq { getPlugin ECSCM-Git }
+);
+$output = `$cl`;
+
+my $gitPlugin = get_xpath( $output, "//pluginName" );
+ok( $gitPlugin, "ECSCM-Git plugin name saved" );
+print "$gitPlugin\n";
+
+# get the current ECSCM plugin name to use it later
+$cl = $qa->ectool_command(
+	qq { getPlugin ECSCM }
+);
+$output = `$cl`;
+
+my $ecscmPluginName = get_xpath( $output, "//pluginName" );
+ok( $ecscmPluginName, "ECSCM plugin name saved" );
+print "$ecscmPluginName\n";
+
+#----------------------------------------------------------------------
 test "Login", sub {
     my $rc = $qa->login();    # Returns 1 for successful login.
     ok( $rc, "Login" );
     BAIL_OUT("Login failed") unless $rc;
 };
 #----------------------------------------------------------------------
-test "CreateConfiguration", sub {
+test "Prepare test projects", sub {
 	my $cmd;
-    my $out;
-    my $got;
-	my $jobId;
+	my $out;
+	my $got;
 	
+	$cmd = $qa->ectool_command( 
+		qq { deleteProject "$testCIProject" } 
+	);
+	$out = `$cmd`;
+	#print "TestCI project deleted.\n";
+
+	$cmd = $qa->ectool_command( 
+		qq { createProject "$testCIProject" } 
+	);
+	$out = `$cmd`;
+	#print "TestCI project created.\n";
+
+	$cmd = $qa->ectool_command( 
+		qq { createProcedure "$testCIProject" "$procedureForCI" } 
+	);
+	$out = `$cmd`;
+	#print "$procedureForCI created.\n";
+
+	$cmd = $qa->ectool_command( 
+		qq { createStep "$testCIProject" "$procedureForCI" "$stepForCI" --command "echo 'done';" } 
+	);
+	$out = `$cmd`;
+	#print "$stepForCI created.";
+	
+	# delete existent and create new AutomationTest Project
+	$cmd = $qa->ectool_command( 
+		qq { deleteProject "$autoTestProject" } 
+	);
+	$out = `$cmd`;
+
+	$cmd = $qa->ectool_command(
+		qq { createProject "$autoTestProject" }
+	);
+	$out = `$cmd`;
+	$got = get_xpath( $out, '//projectName' );
+	is( $got, $autoTestProject, "test project created" );
+	
+	# create a procedure for test
+	$cmd = $qa->ectool_command(
+		qq { createProcedure "$autoTestProject" "$autoTestProcedure" }
+		. qq { --resourceName "local" --workspaceName "default" }
+	);
+	$out = `$cmd`;
+	$got = get_xpath( $out, '//procedureName' );
+	is( $got, $autoTestProcedure, "procedure created" );
+	
+	# create a Git Clone step , provide the parameters
+	$cmd = $qa->ectool_command(
+		qq { createStep "$autoTestProject" "$autoTestProcedure" "$autoTestStep" }
+		. qq { --subproject "$gitPlugin" --subprocedure "CheckoutCode" }
+		. qq { --resourceName "local" --workspaceName "default" }
+		. qq { --actualParameter "config"="gitconf" "GitRepo"="https://github.com/AlexYermakov/yermakov.git" "GitBranch"="master" }
+		. qq { "clone"="1"  "dest"="/usr/gitrep" }
+		# add "depth"="2" back after finish with Git 3.1.2
+	);
+	$out = `$cmd`;
+	$got = get_xpath( $out, '//stepName' );
+	is( $got, $autoTestStep, "clone step created" );
+	
+	pass;
+};
+#----------------------------------------------------------------------
+test "create full configuration", sub {
 	my $configName = "fullConf";
 	my $configDesc = "full configuration";
 	
-	$cmd = $qa->ectool_command( 
-		qq { getPlugin ECSCM-Git } 
-	);
-	$out = `$cmd`;
-	my $project = get_xpath( $out, '//pluginName' );
-	ok( $project, "git project returned" );
+	my $userName = "alex";
+	my $password = "4321";
 	
-	$cmd = $commander->runProcedure(
-		"$project",
+	deleteConfiguration( "$configName" );
+	createConfiguration( "$configName", "$configDesc", "$userName", "$password" );
+	deleteConfiguration( "$configName" );
+};
+#----------------------------------------------------------------
+test "create mini configuration", sub {
+	my $configName = "miniconf";
+	my $configDesc = "";
+	
+	my $userName = "";
+	my $password = "";
+	
+	deleteConfiguration( "$configName" );
+	createConfiguration( "$configName", "$configDesc", "$userName", "$password" );
+	deleteConfiguration( "$configName" );
+};
+#----------------------------------------------------------------
+test "create mini configuration with UTF-8 chars", sub {
+	my $configName = "ВаняplaysFußball";
+	my $configDesc = "";
+	
+	my $userName = "";
+	my $password = "";
+	
+	deleteConfiguration( "$configName" );
+	createConfiguration( "$configName", "$configDesc", "$userName", "$password" );
+	deleteConfiguration( "$configName" );
+};
+#----------------------------------------------------------------
+sub createConfiguration {
+	my $cmd;
+    my $out;
+    my $got;
+	
+	my $configName = $_[0];
+	my $configDesc = $_[1];
+	my $userName = $_[2];
+	my $password = $_[3];
+	
+	$commander->runProcedure(
+		"$gitPlugin",
         { 
 			procedureName => "CreateConfiguration",
 			  pollInterval  => '0.2',
@@ -63,364 +191,385 @@ test "CreateConfiguration", sub {
 			  credential => [
 				{
 				  credentialName => 'test',
-				  userName => "alex",
-				  password => "4321"
+				  userName => "$userName",
+				  password => "$password"
 				 }
-			  ]
-		}
+			  ],
+		},
 	);
-	print "$cmd";
-	$out = `$cmd`;
-	$got = get_xpath( $out, '//outcome' );
-    is( $got, "success", "creation job successed" );
 	
-	# TODO
-	# 1. check if config values equal parameters
+	$cmd = $qa->ectool_command(
+		qq { getProperty /projects/$ecscmPluginName/scm_cfgs/$configName }
+	);
+	$out = `$cmd`;
+	
+	$got = get_xpath( $out, "//propertyName" );
+	is( $got, $configName, "config name equals created config name" );
+	
+	# Default description value is not an empty string. 
+	#$got = get_xpath( $out, "//description" );
+	#is( $got, $configDesc, "config description equals created config desc." );
 };
 #----------------------------------------------------------------
-test "CreateMinimalConfiguration", sub {
+sub deleteConfiguration {
 	my $cmd;
     my $out;
     my $got;
-	my $jobId;
 
-	$cmd = $qa->ectool_command( 
-		qq { getPlugin ECSCM-Git } 
-	);
-	$out = `$cmd`;
-	my $project = get_xpath( $out, '//pluginName' );
-	
-	$cmd = $commander->runProcedure(
-		"$project",
-        { 
-			procedureName => "CreateConfiguration",
-			  pollInterval  => '0.2',
-			  timeout       => 600,
-			  actualParameter => [
-				{ actualParameterName => 'config', value => "realMiniConf" },
-				{ actualParameterName => 'desc', value => "" },
-				{ actualParameterName => 'credential', value => "test" },
-			  ],
-			  credential => [
-				{
-				  credentialName => 'test',
-				  userName => "",
-				  password => "",
-				 },
-			  ],
-		}
-	);  
-	print "$cmd";
-    $out = `$cmd`;
-	$got = get_xpath( $out, '//outcome' );
-    is( $got, "success", "creation job successed" );
-	
-	# TODO
-	# 1. check if config values equal parameters
-};
-#----------------------------------------------------------------
-test "CreateMinimalConfiguration_UTF8chars", sub {
-	my $cmd;
-    my $out;
-    my $got;
-	my $jobId;
+	my $configName = $_[0];
 	
 	$cmd = $qa->ectool_command( 
-		qq { getPlugin ECSCM-Git } 
-	);
-	$out = `$cmd`;
-	my $project = get_xpath( $out, '//pluginName' );
-	
-	$cmd = $commander->runProcedure(
-		"$project",
-        { 
-			procedureName => "CreateConfiguration",
-			  pollInterval  => '0.2',
-			  timeout       => 600,
-			  actualParameter => [
-				{ actualParameterName => 'config', value => "Ваня plays Fußball" },
-				{ actualParameterName => 'desc', value => "" },
-				{ actualParameterName => 'credential', value => "test" },
-			  ],
-			  credential => [
-				{
-				  credentialName => 'test',
-				  userName => "",
-				  password => "",
-				 },
-			  ],
-		}
-	);
-	print "$cmd";
-    $out = `$cmd`;
-	$got = get_xpath( $out, '//outcome' );
-    is( $got, "success", "creation job successed" );
-	
-	# TODO
-	# 1. check if config values equal parameters
-};
-#----------------------------------------------------------------
-test "DeleteConfiguration", sub {
-	my $cmd;
-    my $out;
-    my $got;
-	my $jobId;
-
-	$cmd = $qa->ectool_command( 
-		qq { getPlugin ECSCM } 
-	);
-	$out = `$cmd`;
-	my $project = get_xpath( $out, '//pluginName' );
-	
-	$cmd = $qa->ectool_command( qq{ runProcedure }
-		. qq{ "$project"}
+	    qq{ runProcedure "$ecscmPluginName" }
 		. qq{ --procedureName "DeleteConfiguration"}
-		. qq{ --actualParameter config=realMiniConf }
-		. qq{ --pollInterval 1}
+		. qq{ --actualParameter config="$configName" }
 	);
-    $out = `$cmd`;
-	$got = get_xpath( $out, '//outcome' );
-    is( $got, "success", "DeleteConfiguration" );
+    my $jobId = `$cmd`;
+	chomp $jobId;
 	
-	# TODO
-	# 1. check if config does not exist anymore
+	do {
+		$cmd = $qa->ectool_command(
+			qq { getJobStatus "$jobId" }
+		);
+		$out = `$cmd`;
+		$got = get_xpath( $out, "//status" );
+    } while( $got eq "running" || $got eq "runnable" || $got eq "pending" );
+	
+	$got = get_xpath( $out, "//outcome" );
+    is( $got, "success", "configuration deleted" );
+};
+#----------------------------------------------------------------
+test "CI schedule - branch is master", sub {
+	createCIschedule("https://github.com/AlexYermakov/yermakov.git", "/usr/gitrep", "master", "0", "branchMaster" );
+};
+#----------------------------------------------------------------
+test "CI schedule - lsRemote", sub {
+	createCIschedule("https://github.com/AlexYermakov/yermakov.git", "/usr/gitrep", "master", "1", "lsRemote" );
+};
+#----------------------------------------------------------------
+test "CI schedule - branch does not exist", sub {
+	createCIschedule("https://github.com/AlexYermakov/yermakov.git", "/usr/gitrep", "unknownBranch", "0", "branchNotExist" );
+};
+#----------------------------------------------------------------
+test "CI schedule - repo not exist", sub {
+	createCIschedule("https://github.com/thisrepodoesnotexist/wow.git", "/usr/gitrep", "master", "0", "repoNotExist" );
+};
+#----------------------------------------------------------------
+test "CI schedule - Bitbucket", sub {
+	createCIschedule("https://bitbucket.org/aiermakov/gitest.git", "/usr/bbrepo", "master", "0", "BitBucket" );
+};
+#----------------------------------------------------------------
+test "CI schedule - Bitbucket - repo does not exist", sub {
+	createCIschedule("https://bitbucket.org/aiermakov/unknownrepo.git", "/usr/bbrepo", "master", "0", "BitBucketNotExist" );
 };
 #----------------------------------------------------------------
 sub createCIschedule {
 	my $cmd;
     my $out;
     my $got;
-	my $jobId;
-
-    my $project = "TestCI";
-	my $schedule = POSIX::strftime('%y%m%d%H%M%S', localtime);
-	my $procedure = "PrintSome";
-	my $propertyId;
 	
 	my $repo = $_[0];
 	my $dest = $_[1];
 	my $branch = $_[2];
 	my $lsRemote = $_[3];
-
-	# TODO: check if the schedule with the specified name does not exist in the project (before we try to create it)
+	my $schedule = $_[4];
 	
-	$cmd = $qa->ectool_command( qq{ createSchedule "$project" "$schedule" }
-		. qq{ --procedureName "$procedure"}
+	# create schedule with a created procedure
+	$cmd = $qa->ectool_command( 
+		  qq { createSchedule "$testCIProject" "$schedule" }
+	    . qq { --procedureName "$procedureForCI"}
 	); 
 	$out = `$cmd`;
-	my $scheduleId = get_xpath( $out, '//scheduleId' );
-	ok( $scheduleId, "Returned a schedule Id" );
+	$got = get_xpath( $out, '//scheduleId' );
+	ok( $got, "schedule ID returned" );
 	
-	###### Set formType
-	$cmd = $qa->ectool_command( qq{ setProperty /projects/$project/schedules/$schedule/ec_customEditorData/formType }
-		. qq{ --value \\$[/plugins/ECSCM-Git/project/scm_form/sentry] }
+	# set formType
+	$cmd = $qa->ectool_command( qq{ setProperty /projects/$testCIProject/schedules/$schedule/ec_customEditorData/formType }
+		. qq{ --value '\$[/plugins/ECSCM-Git/project/scm_form/sentry]' }
 	);
 	$out = `$cmd`;
-	$propertyId = get_xpath( $out, '//propertyId' );
-	ok( $propertyId, "Returned a property Id" );
+	$got = get_xpath( $out, '//propertyId' );
+	ok( $got, "Returned a property Id" );
 	
-	###### Set scmConfig
-	$cmd = $qa->ectool_command( qq{ setProperty /projects/$project/schedules/$schedule/ec_customEditorData/scmConfig }
+	# set scmConfig
+	$cmd = $qa->ectool_command( qq{ setProperty /projects/$testCIProject/schedules/$schedule/ec_customEditorData/scmConfig }
 		. qq{ --value gitconf }
 	);
 	$out = `$cmd`;
-	$propertyId = get_xpath( $out, '//propertyId' );
-	ok( $propertyId, "Returned a property Id" );
+	$got = get_xpath( $out, '//propertyId' );
+	ok( $got, "Returned a property Id" );
 	
-	###### Set GitRepo
-     $cmd = $qa->ectool_command( qq{ setProperty ec_customEditorData/GitRepo }
+	 # set GitRepo
+     $cmd = $qa->ectool_command( qq{ setProperty /projects/$testCIProject/schedules/$schedule/ec_customEditorData/GitRepo }
           . qq{ --value $repo }
-          . qq{ --projectName "$project" }
+          . qq{ --projectName "$testCIProject" }
           . qq{ --scheduleName "$schedule"}
      );
      $out = `$cmd`;
-     $propertyId = get_xpath( $out, '//propertyId' );
-     ok( $propertyId, "Returned a property Id" );
+     $got = get_xpath( $out, '//propertyId' );
+	 ok( $got, "Returned a property Id" );
      
-     ###### Set dest
-     $cmd = $qa->ectool_command( qq{ setProperty ec_customEditorData/dest }
+     # set dest
+     $cmd = $qa->ectool_command( qq{ setProperty /projects/$testCIProject/schedules/$schedule/ec_customEditorData/dest }
           . qq{ --value $dest }
-          . qq{ --projectName "$project" }
+          . qq{ --projectName "$testCIProject" }
           . qq{ --scheduleName "$schedule"}
      );
      $out = `$cmd`;
-     $propertyId = get_xpath( $out, '//propertyId' );
-     ok( $propertyId, "Returned a property Id" );
+     $got = get_xpath( $out, '//propertyId' );
+	ok( $got, "Returned a property Id" );
      
-     ###### Set GitBranch
-     $cmd = $qa->ectool_command( qq{ setProperty ec_customEditorData/GitBranch }
+     # set GitBranch
+     $cmd = $qa->ectool_command( qq{ setProperty /projects/$testCIProject/schedules/$schedule/ec_customEditorData/GitBranch }
           . qq{ --value $branch }
-          . qq{ --projectName "$project" }
+          . qq{ --projectName "$testCIProject" }
           . qq{ --scheduleName "$schedule"}
      );
      $out = `$cmd`;
-     $propertyId = get_xpath( $out, '//propertyId' );
-     ok( $propertyId, "Returned a property Id" );
+     $got = get_xpath( $out, '//propertyId' );
+	ok( $got, "Returned a property Id" );
      
-     ###### Set lsRemote
-     $cmd = $qa->ectool_command( qq{ setProperty ec_customEditorData/lsRemote }
+     # set lsRemote
+     $cmd = $qa->ectool_command( qq{ setProperty /projects/$testCIProject/schedules/$schedule/ec_customEditorData/lsRemote }
           . qq{ --value $lsRemote }
-          . qq{ --projectName "$project" }
+          . qq{ --projectName "$testCIProject" }
           . qq{ --scheduleName "$schedule"}
      );
      $out = `$cmd`;
-     $propertyId = get_xpath( $out, '//propertyId' );
-     ok( $propertyId, "Returned a property Id" );
+     $got = get_xpath( $out, '//propertyId' );
+	ok( $got, "Returned a property Id" );
      
-     ###### Set monitorTags
-     $cmd = $qa->ectool_command( qq{ setProperty ec_customEditorData/monitorTags }
+     # set monitorTags
+     $cmd = $qa->ectool_command( qq{ setProperty /projects/$testCIProject/schedules/$schedule/ec_customEditorData/monitorTags }
           . qq{ --value 1 }
-          . qq{ --projectName "$project" }
+          . qq{ --projectName "$testCIProject" }
           . qq{ --scheduleName "$schedule"}
      );
      $out = `$cmd`;
-     $propertyId = get_xpath( $out, '//propertyId' );
-     ok( $propertyId, "Returned a property Id" );
+     $got = get_xpath( $out, '//propertyId' );
+	ok( $got, "Returned a property Id" );
      
-     ###### Set TriggerFlag
-     $cmd = $qa->ectool_command( qq{ setProperty ec_customEditorData/TriggerFlag }
+     # set TriggerFlag
+     $cmd = $qa->ectool_command( qq{ setProperty /projects/$testCIProject/schedules/$schedule/ec_customEditorData/TriggerFlag }
           . qq{ --value 2 }
-          . qq{ --projectName "$project" }
+          . qq{ --projectName "$testCIProject" }
           . qq{ --scheduleName "$schedule"}
      );
      $out = `$cmd`;
-     $propertyId = get_xpath( $out, '//propertyId' );
-     ok( $propertyId, "Returned a property Id" );
+     $got = get_xpath( $out, '//propertyId' );
+	ok( $got, "Returned a property Id" );
 	 
-	 ### Run the CI schedule
-	 $cmd = $qa->ectool_command( qq{ runProcedure }
-		. qq{ "$project"}
-		. qq{ --procedureName $procedure }
-		. qq{ --scheduleName $schedule }
-		. qq{ --pollInterval 1 }
+	 # run the CI schedule
+	 $cmd = $qa->ectool_command( 
+		  qq{ runProcedure "$testCIProject" }
+		. qq{ --procedureName "$procedureForCI" }
+		. qq{ --scheduleName "$schedule" }
 	); 
-    $out = `$cmd`;
-	$got = get_xpath( $out, '//outcome' );
-    is( $got, "success", "Run CI schedule" );
+    my $jobId = `$cmd`;
+	chomp $jobId;
 	
-	# TODO: 
-	# 1. check if the properties are set correctly 
+	do {
+		$cmd = $qa->ectool_command(
+			qq { getJobStatus "$jobId" }
+		);
+		$out = `$cmd`;
+		$got = get_xpath( $out, "//status" );
+    } while( $got ne "completed" );
+	
+	$got = get_xpath( $out, "//outcome" );
+    is( $got, "success", "run CI schedule" );
 };
 #----------------------------------------------------------------
-test "CISchedule_BranchMaster", sub {
-	&createCIschedule("https://github.com/AlexYermakov/yermakov.git", "/usr/gitrep", "master", 0 );
+# Automation of http://jira/browse/ECPSCMGIT-42 "plugin doesn't allow for username without password" 
+test "repo url without password", sub {
+my $matcher = <<'EOF';
+          my @newMatchers = (
+               {
+                 id      => "repoUrlNoPassword",
+                 pattern => "((http|https|ssh|git):\/\/)(\w+\:)(\@)(\w)+",
+                 action  => q { setProperty("/projects/AutomationTest/repoUrlNoPassword", 1) }
+               },
+          );
+          push @::gMatchers, @newMatchers;
+EOF
+	
+	my $matcherProperty = "repoUrlNoPassword";
+	
+	runCheckout( $matcher, $matcherProperty, "matcher1" );
 };
-#----------------------------------------------------------------
-test "CISchedule_lsRemote", sub {
-	&createCIschedule("https://github.com/AlexYermakov/yermakov.git", "/usr/gitrep", "master", 1 );
+#-----------------------------------------------------------------
+test "repo url without name", sub {
+my $matcher = <<'EOF';
+          my @newMatchers = (
+               {
+                 id      => "repoUrlNoName",
+                 pattern => "((http|https|ssh|git):\/\/)(\:\w+)(\@)(\w)+",
+                 action  => q { setProperty("/projects/AutomationTest/repoUrlNoName", 1) }
+               },
+          );
+          push @::gMatchers, @newMatchers;
+EOF
+	
+	my $matcherProperty = "repoUrlNoName";
+	
+	runCheckout( $matcher, $matcherProperty, "matcher2" );
 };
-#----------------------------------------------------------------
-test "CISchedule_BranchDoesNotExist", sub {
-	&createCIschedule("https://github.com/AlexYermakov/yermakov.git", "/usr/gitrep", "unknownBranch", 0 );
+#-----------------------------------------------------------------
+# Automation of http://jira/browse/ECPSCMGIT-75 , http://jira/browse/ECPSCMGIT-47
+test "ECPSCMGIT-75 - checkoutCode returned", sub {
+	# our specific postp matcher code for "checkoutCode returned 1"
+my $matcher = <<'EOF';
+          my @newMatchers = (
+               {
+                 id      => "checkoutCodeForSuccess",
+                 pattern => "checkoutCode returned 1",
+                 action  => q { setProperty("/projects/AutomationTest/checkoutCodeForSuccess", 1) }
+               },
+          );
+          push @::gMatchers, @newMatchers;
+EOF
+
+	my $matcherProperty = "checkoutCodeForSuccess";
+	
+	my $cmd;
+    my $out;
+    my $got;
+
+	my $matcherName = "matcher3";
+	
+	# initialize the property that will contain our specific postp matcher
+	$cmd = $qa->ectool_command(
+		qq { setProperty /projects/$autoTestProject/$matcherProperty --value 0 }
+	);
+	$out = `$cmd`;
+	
+	# add out specific postp matcher code to the property at AutomationTest project for later evaluation
+	$cmd = $qa->ectool_command(
+		qq { setProperty "$matcherName" }
+		. qq { --projectName "$autoTestProject" }
+		. qq { --value '$matcher' }
+	);
+	$out = `$cmd`;
+	
+	# save the default ECSCM runMethod postprocessor to restore it later
+	$cmd = $qa->ectool_command(
+		qq { getStep "$ecscmPluginName" "RunMethod" "runMethod" }
+	);
+	$out = `$cmd`;
+	my $restoredPostp = get_xpath( $out, "//postProcessor" );
+	print "$restoredPostp\n";
+	
+	# set out specific matcher as a runMethod postprocessor in ECSCM
+	$cmd = $qa->ectool_command(
+		qq { modifyStep "$ecscmPluginName" "RunMethod" "runMethod" }
+		. qq { --postProcessor "postp --loadProperty /projects/$autoTestProject/$matcherName" }
+	);
+	$out = `$cmd`;
+	
+	# run our procedure that contains Git Clone step
+	$cmd = $qa->ectool_command(
+		qq { runProcedure "$autoTestProject" }
+		. qq { --procedureName "$autoTestProcedure" }
+	);
+	my $jobId = `$cmd`;
+	chomp $jobId;
+	do {
+		$cmd = $qa->ectool_command(
+			qq { getJobStatus "$jobId" }
+		);
+		$out = `$cmd`;
+		$got = get_xpath( $out, '//status' );
+    } while( $got eq "running" || $got eq "runnable" || $got eq "pending" );
+	
+	# verify that the job failed
+	my $outcome = get_xpath( $out, "//outcome");
+	
+	# check that code returned is 0 (conforms to an error case)
+	$cmd = $qa->ectool_command(
+		qq { getProperty /projects/$autoTestProject/$matcherProperty }
+	);
+	$out = `$cmd`;
+	
+	# We have not to meet the strings 'checkoutCode returned 1' in log, when job outcome is 'error'
+	# If the job hasn't failed, then it's not important to check if 'checkoutCode returned 1' exists in log
+	if( $outcome eq "error" ) {
+		is( $out, 0, "code is for error" );
+	}
+		
+	# Restore the default ECSCM runMethod postprocessor
+	$cmd = $qa->ectool_command(
+		qq { modifyStep "$ecscmPluginName" "RunMethod" "runMethod" }
+		. qq { --postProcessor "$restoredPostp" }
+	);
+	$out = `$cmd`;
 };
-#----------------------------------------------------------------
-test "CISchedule_RepoNotExist", sub {
-	&createCIschedule("https://github.com/thisrepodoesnotexist/wow.git", "/usr/gitrep", "master", 0 );
-};
-#----------------------------------------------------------------
-test "CISchedule_Bitbucket", sub {
-	&createCIschedule("https://bitbucket.org/aiermakov/gitest.git", "/usr/bbrepo", "master", 0 );
-};
-#----------------------------------------------------------------
-test "CISchedule_BitbucketNonExist", sub {
-	&createCIschedule("https://bitbucket.org/aiermakov/unknownrepo.git", "/usr/bbrepo", "master", 0 );
-};
-#----------------------------------------------------------------
-# Automation of http://jira.electric-cloud.com/browse/ECPSCMGIT-47
-test "Checkout status equals to code returned", sub {
+#-----------------------------------------------------------------
+sub runCheckout {
 	my $cmd;
     my $out;
     my $got;
 	
-	my $project = "TestCI";
-	my $procedure = "testGitClone";
-	my $step = "clone3";
+	my $matcher = $_[0];
+	my $matcherProperty = $_[1];
+	my $matcherName = $_[2];
 	
-	my $gitConf = "gitconf";
-	my $branch = "master";
-	my $dest = "/usr/gitrep";
-	my $repo = "https://github.com/AlexYermakov/yermakov.git";
-	my $tag = "";
-	my $clone = "1";
-	
-	# create a procedure with Git clone checkout step
+	# initialize the property that will contain our specific postp matcher
 	$cmd = $qa->ectool_command(
-		qq { createProcedure $project $procedure }
-	  . qq { --workspaceName default }
+		qq { setProperty /projects/$autoTestProject/$matcherProperty --value 0 }
 	);
 	$out = `$cmd`;
-	$got = get_xpath( $out, '//procedureId' );
-	ok( $got, "create a procedure" );
 	
-	$cmd = $qa->ectool_command( 
-		qq{ getPlugin ECSCM-Git } 
+	# add out specific postp matcher code to the property at AutomationTest project for later evaluation
+	$cmd = $qa->ectool_command(
+		qq { setProperty "$matcherName" }
+		. qq { --projectName "$autoTestProject" }
+		. qq { --value '$matcher' }
 	);
 	$out = `$cmd`;
-	my $gitProject = get_xpath( $out, '//pluginName' );
 	
+	# save the default ECSCM runMethod postprocessor to restore it later
 	$cmd = $qa->ectool_command(
-		qq { createStep $project $procedure $step }
-	  . qq { --subproject $gitProject --subprocedure CheckoutCode }
-	  . qq { --resourceName local --workspaceName default }
-	  . qq { --actualParameter }
-		. qq { config=$gitConf }
-		. qq { tag=$tag }
-		. qq { dest=$dest }
-		. qq { commit="" }
-		. qq { GitBranch=$branch }
-		. qq { clone=$clone }
-		. qq { GitRepo=$repo }
+		qq { getStep "$ecscmPluginName" "RunMethod" "runMethod" }
 	);
 	$out = `$cmd`;
-	$got = get_xpath( $out, '//stepId' );
-	ok( $got, "create a checkout clone step" );
+	my $restoredPostp = get_xpath( $out, "//postProcessor" );
 	
-	# run the procedure
+	# set out specific matcher as a runMethod postprocessor in ECSCM
 	$cmd = $qa->ectool_command(
-		qq { runProcedure $project }
-	  . qq { --procedureName $procedure }
-	  . qq { --pollInterval 1 }
+		qq { modifyStep "$ecscmPluginName" "RunMethod" "runMethod" }
+		. qq { --postProcessor "postp --loadProperty /projects/$autoTestProject/$matcherName" }
+	);
+	$out = `$cmd`;
+	
+	# run our procedure that contains Git Clone step
+	$cmd = $qa->ectool_command(
+		qq { runProcedure "$autoTestProject" }
+		. qq { --procedureName "$autoTestProcedure" }
 	);
 	my $jobId = `$cmd`;
-	# check if the job succeed
+	chomp $jobId;
+	do {
+		$cmd = $qa->ectool_command(
+			qq { getJobStatus "$jobId" }
+		);
+		$out = `$cmd`;
+		$got = get_xpath( $out, '//status' );
+    } while( $got eq "running" || $got eq "runnable" || $got eq "pending" );
+	
+	# verify that the job failed
+	my $outcome = get_xpath( $out, "//outcome");
+	
+	# check that code returned is 0 (conforms to an error case)
 	$cmd = $qa->ectool_command(
-		qq { getJobStatus $jobId }
+		qq { getProperty /projects/$autoTestProject/$matcherProperty }
 	);
 	$out = `$cmd`;
-	$got = get_xpath( $out, '//outcome' );
-    is( $got, "success", "run checkout procedure" );
 	
-	# get the log file path 
+	is( $out, 0, "error did not occur" );
+		
+	# Restore the default ECSCM runMethod postprocessor
 	$cmd = $qa->ectool_command(
-		qq { getJobDetails $jobId }
+		qq { modifyStep "$ecscmPluginName" "RunMethod" "runMethod" }
+		. qq { --postProcessor "$restoredPostp" }
 	);
 	$out = `$cmd`;
-	my $logDir = get_xpath( $out, '//unix' );
-	print $logDir;
-	ok( $logDir, "path returned" );
-	# get the log file and open it
-	# directory must contain the only one log file
-	#my @files = glob "$logDir/*.log";
-	#print $files[0];
-	#my $file = $files[0];
-	#open(LOG, $file) or die("Could not open a job log file.");
-	
-	# If the log contains fatal: or error: Then returned code must be 0, not 1
-	#my $line;
-	#foreach $line (<LOG>) {
-	#	if (index($line, "fatal:") != -1) {
-	#		print "$line contains fatal:\n";
-	#	}
-	#	if (index($line, "error:") != -1) {
-	#		print "$line contains error:\n";
-	#	}
-	#}
-	#close(LOG);
-	
-};
-#----------------------------------------------------------------
-# Automation of http://jira/browse/ECPSCMGIT-42 
-test "plugin doesn't allow for username without password", sub {
-	# ((http|https|ssh|git):\/\/)(\w+\:\w+)(\@)(\w)+
-	
 };
